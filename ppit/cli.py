@@ -173,15 +173,13 @@ def download_ret(n_parallel: int = 10):
 
 
 @app.command()
-def gen_dataset(n_parallel: int = 10, cpu_per_task: int = 4):
+def gen_crypto_dataset(n_parallel: int = 10, cpu_per_task: int = 4):
     "generate dataset for training."
     import glob
     from pathlib import Path
-
-    import ray
     
     cfg = Config()
-    x_dates = [Path(_p).stem for _p in glob.glob(os.path.join(cfg.downsampled_10m_dir, "*.parquet"))]
+    x_dates = [Path(_p).stem for _p in glob.glob(os.path.join(cfg.bar_1m_dir, "*.parquet"))]
     y_dates = [Path(_p).stem for _p in glob.glob(os.path.join(cfg.ret_1h_dir, "*.parquet"))]
     u_dates = [Path(_p).stem for _p in glob.glob(os.path.join(cfg.univ_dir, "*.parquet"))]
     
@@ -220,5 +218,129 @@ def gen_dataset(n_parallel: int = 10, cpu_per_task: int = 4):
     queue_results.extend(ray.get(task_ids))
     typer.echo("Done")
 
+# @click.command()
+# @click.option(
+#     "--n_jobs", default=10, type=int, help="number of parallel jobs are most."
+# )
+# @click.option(
+#     "--cpus_per_task", "n_cpu", default=2, type=int, help="number of cpus per task."
+# )
+# @click.option("--verbose", "-v", is_flag=True, help="whether to print progress.")
+# def long2widev2(n_jobs, n_cpu, verbose):
+#     """Long to wide for v2 bars."""
+#     import re
+#     import ray
+#     import itertools
+
+#     cfg = read_config()
+#     dir = Path(cfg.raw.dir)
+#     src_dir = dir.joinpath("bar_1m")
+#     tgt_dir = dir.joinpath("bar_1m_wide_v2")
+#     if verbose is True:
+#         click.echo(f"long2wide from {src_dir} to {tgt_dir}")
+#     tgt_dir.mkdir(parents=True, exist_ok=True)
+
+#     src_dates = [re.findall(r"\d{4}-\d{2}-\d{2}", d)[0] for d in os.listdir(src_dir)]
+#     tgt_dates = [re.findall(r"\d{4}-\d{2}-\d{2}", d)[0] for d in os.listdir(tgt_dir)]
+#     trading_dates = sorted(set(src_dates) - set(tgt_dates))
+#     if verbose is True:
+#         click.echo(f"{trading_dates=}")
+#     click.echo(f"Long to wide {len(trading_dates)} tasks to be done.")
+
+#     ray.init(num_cpus=n_jobs * n_cpu, ignore_reinit_error=True, include_dashboard=False)
+
+#     @ray.remote(max_calls=1)
+#     def long2wide_fn(date: str):
+#         if verbose is True:
+#             click.echo(f"running on {date}")
+#         df = pl.scan_parquet(f"{src_dir}/{date}.parq")
+#         cols = get_bars("v2")
+#         df = df.with_columns(pl.col("time").dt.strftime("%H%M").alias("slot"))
+#         df = df.with_columns([pl.col(_c).cast(pl.Float32) for _c in cols]).collect()
+#         slots = df.get_column("slot").unique().sort().to_list()
+#         df = df.pivot(index=["symbol", "date"], columns="slot", values=cols)
+#         name_mapping = {
+#             f"{col}_slot_{slt}": f"{col}_{slt}"
+#             for col, slt in itertools.product(cols, slots)
+#         }
+#         df = df.rename(name_mapping)
+#         df.write_parquet(f"{tgt_dir}/{date}.parq")
+#         return date
+
+#     task_ids = []
+#     n_task_finished = 0
+#     for exp_id, _d in enumerate(trading_dates, 1):
+#         if verbose is True:
+#             click.echo(f"running on {_d}")
+#         task_id = long2wide_fn.options(
+#             name="x",
+#             num_cpus=n_cpu,
+#         ).remote(date=_d)
+#         task_ids.append(task_id)
+
+#         if len(task_ids) >= n_jobs:
+#             dones, task_ids = ray.wait(task_ids, num_returns=1)
+#             ray.get(dones)
+#             n_task_finished += 1
+#             logger.info(f"{n_task_finished} tasks finished.")
+#     ray.get(task_ids)
+#     click.echo("task long2wide_v2 done.")
+
+
+
+
+# @click.command()
+# def show_config():
+#     """Print the configurations in the current config file."""
+#     cfg = read_config()
+#     click.echo(OmegaConf.to_yaml(cfg))
+
+
+# @click.command()
+# @click.option("--duration", default="30m", type=click.Choice(["15m", "30m", "1h", "2h", '1d', '2d', '5d']))
+# def compute_slot_return(duration):
+#     """compute returns for 8 intraday slots.
+#     """
+#     slots = ['0931', '1000', '1030', '1100', '1301', '1330', '1400', '1430']
+#     times = [datetime.time(hour=int(s[:2]), minute=int(s[2:])) for s in slots]
+#     cfg = read_config()
+    
+#     price_dir = os.path.join(cfg.raw.dir, 'ohlcv_1m')
+#     cols = ['time', 'symbol', 'adj_close']
+#     pl.enable_string_cache()
+#     df_price = pl.scan_parquet(price_dir + "/*.parq").select(cols).collect()
+    
+#     df_price_left = df_price.filter(pl.col('time').dt.time().is_in(times))
+#     df_adj = adjust_tcalendar_slot_df(duration=duration, start_slot=slots) # two columns: time, next_time
+#     end_times = df_adj.select(pl.col('next_time').dt.time().unique()).to_series().to_list()
+#     df_price_right = df_price.filter(pl.col('time').dt.time().is_in(end_times))
+    
+#     df_merge = df_price_left.join(df_adj, on='time')
+#     df_merge = df_merge.join(
+#         df_price_right, 
+#         left_on=['next_time', 'symbol'], 
+#         right_on=['time', 'symbol'], 
+#         suffix='_right'
+#     )
+    
+#     df_ret = df_merge.select(
+#         pl.col('time').cast(pl.Date).alias('date'),
+#         pl.col('time'),
+#         pl.col('symbol'),
+#         pl.col('adj_close_right').truediv(pl.col("adj_close")).sub(1).alias(f'ret_{duration}')
+#     )
+
+#     item_dir = os.path.join(cfg.derived.dir, f'ret_{duration}')
+#     item_dir = Path(item_dir)
+#     item_dir.mkdir(parents=True, exist_ok=True)
+    
+#     # df_
+#     for d, _df in df_ret.partition_by(["date"], as_dict=True).items():
+#         # for (d, ), _df in df.partition_by(["date"], as_dict=True).items():
+#         _df.write_parquet(f"{item_dir}/{d:%Y-%m-%d}.parq")
+#     click.echo("task slot return done.")
+    
+        
+        
 if __name__ == "__main__":
     app()

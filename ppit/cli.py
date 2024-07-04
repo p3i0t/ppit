@@ -55,6 +55,8 @@ def generate_dataset_for_one_day(
         os.path.join(u_dir, f"{date}.parquet")
         ).filter(pl.col('univ_research')).collect()
     dfx = pl.read_parquet(os.path.join(x_dir, f"{date}.parquet"))
+    if "date" not in dfx.columns:
+        dfx = dfx.with_columns(pl.col("time").dt.date().alias("date"))
     dfx_down = downsample_1m(
             dfx, bars=cfg.features_raw, agg_list=None
         )

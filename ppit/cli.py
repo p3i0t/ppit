@@ -1,8 +1,9 @@
 import datetime
 import os
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import polars as pl
+import ray
 import typer
 
 from .config import Config
@@ -11,6 +12,34 @@ from .downsample import downsample_1m
 app = typer.Typer(
     pretty_exceptions_show_locals=False, 
     pretty_exceptions_enable=False)
+
+
+def get_or_create_ray_cluster(init_args: Optional[Dict[str, Any]] = None) -> None:
+    """
+    Check for an existing Ray cluster and connect to it. If none exists, initialize a new one.
+
+    Args:
+    init_args (Optional[Dict[str, Any]]): Arguments to pass to ray.init() if a new cluster needs to be created.
+                                          Defaults to None, which will use Ray's default settings.
+
+    Returns:
+    None
+    """
+    try:
+        # Try to connect to an existing cluster
+        ray.init(address='auto', ignore_reinit_error=True)
+        print("Connected to existing Ray cluster.")
+        cluster_info = ray.cluster_resources()
+        print(f"Cluster resources: {cluster_info}")
+    except ConnectionError:
+        # If no cluster is available, initialize a new one
+        print("No existing Ray cluster found. Initializing a new one.")
+        init_args = init_args or {}
+        ray.init(**init_args)
+        print("New Ray cluster initialized.")
+        cluster_info = ray.cluster_resources()
+        print(f"Cluster resources: {cluster_info}")
+
 
 
 def generate_dataset_for_one_day(
@@ -39,19 +68,12 @@ def generate_dataset_for_one_day(
     
     
 @app.command()
-def down(n_parallel: int = 10, cpu_per_task: int = 4, ray_address: Optional[str] = None):
+def down(n_parallel: int = 10, cpu_per_task: int = 4):
     "downsample 1m bars to 10m bars."
     cfg = Config()
     import glob
 
-    import ray
-    if ray_address is None:
-        ray.init(num_cpus=n_parallel*cpu_per_task)
-    else:
-        ray.init(
-            address=ray_address, 
-            num_cpus=n_parallel*cpu_per_task, 
-            ignore_reinit_error=True)
+    get_or_create_ray_cluster(init_args={"num_cpus": n_parallel * cpu_per_task})
 
     @ray.remote(num_cpus=cpu_per_task)
     def _run_single(src_file: str):
@@ -151,7 +173,7 @@ def download_ret(n_parallel: int = 10):
 
 
 @app.command()
-def gen_dataset(n_parallel: int = 10, cpu_per_task: int = 4, ray_address: Optional[str] = None):
+def gen_dataset(n_parallel: int = 10, cpu_per_task: int = 4):
     "generate dataset for training."
     import glob
     from pathlib import Path
@@ -169,13 +191,8 @@ def gen_dataset(n_parallel: int = 10, cpu_per_task: int = 4, ray_address: Option
     _left_dates = [_d for _d in _dates if _d not in existing_dates]  
     typer.echo(f"Total dates to process: {len(_left_dates)}")
     
-    if ray_address is None:
-        ray.init(num_cpus=n_parallel*cpu_per_task)
-    else:
-        ray.init(
-            address=ray_address, 
-            num_cpus=n_parallel*cpu_per_task, 
-            ignore_reinit_error=True)
+    ray_args = {"num_cpus": n_parallel * cpu_per_task}
+    get_or_create_ray_cluster(ray_args)
     
     @ray.remote(num_cpus=cpu_per_task)
     def run_single(date: str):

@@ -1,34 +1,63 @@
-import os
 import datetime
+import os
+from typing import Optional
 
 import polars as pl
 import typer
 
-from .downsample import downsample_1m_to_10m
 from .config import Config
+from .downsample import downsample_1m
 
-app = typer.Typer()
+app = typer.Typer(
+    pretty_exceptions_show_locals=False, 
+    pretty_exceptions_enable=False)
 
-RAY_IP = '127.0.0.1'
-RAY_PORT = 8778
 
-RAY_ADDRESS = f"ray://{RAY_IP}:{RAY_PORT}"
-
-@app.command()
-def down(n_parallel: int = 10):
-    "downsample 1m bars to 10m bars."
+def generate_dataset_for_one_day(
+    *,
+    date: datetime.date,
+    u_dir: str,
+    x_dir: str,
+    y_dir: str,
+    ) -> pl.DataFrame:
     cfg = Config()
 
-    import ray
+    dfu = pl.scan_parquet(
+        os.path.join(u_dir, f"{date}.parquet")
+        ).filter(pl.col('univ_research')).collect()
+    dfx = pl.read_parquet(os.path.join(x_dir, f"{date}.parquet"))
+    dfx_down = downsample_1m(
+            dfx, bars=cfg.features_raw, agg_list=None
+        )
+    
+    dfy = pl.read_parquet(os.path.join(y_dir, f"{date}.parquet"))
+    
+    df_dataset = dfu.join(dfx_down, on=["date", "symbol"], coalesce=True, how="left")
+    df_dataset = df_dataset.join(dfy, on=["date", "symbol"], coalesce=True, how="left")
+    return df_dataset
+
+    
+    
+@app.command()
+def down(n_parallel: int = 10, cpu_per_task: int = 4, ray_address: Optional[str] = None):
+    "downsample 1m bars to 10m bars."
+    cfg = Config()
     import glob
 
-    # ray.init(address=RAY_ADDRESS, num_cpus=n_parallel, ignore_reinit_error=True)
+    import ray
+    if ray_address is None:
+        ray.init(num_cpus=n_parallel*cpu_per_task)
+    else:
+        ray.init(
+            address=ray_address, 
+            num_cpus=n_parallel*cpu_per_task, 
+            ignore_reinit_error=True)
 
-    @ray.remote(num_cpus=1)
+    @ray.remote(num_cpus=cpu_per_task)
     def _run_single(src_file: str):
         df = pl.read_parquet(src_file)
-        df_down = downsample_1m_to_10m(
-            df, cfg.time_col, cfg.by_cols, bars=cfg.features_raw, agg_list=None
+        df_down = downsample_1m(
+            df, bars=cfg.features_raw, agg_list=None
         )
         if not os.path.exists(cfg.downsampled_10m_dir):
             os.makedirs(cfg.downsampled_10m_dir, exist_ok=True)
@@ -55,9 +84,10 @@ def download_ret(n_parallel: int = 10):
     "download return for every 1h."
     cfg = Config()
 
-    import ray
     import glob
     from pathlib import Path
+
+    import ray
 
     @ray.remote(num_cpus=1)
     def run_single(begin):
@@ -121,78 +151,51 @@ def download_ret(n_parallel: int = 10):
 
 
 @app.command()
-def gen_dataset(n_parallel: int = 10, y_horizon: str = "1h", x_horizon: str= "2h"):
+def gen_dataset(n_parallel: int = 10, cpu_per_task: int = 4, ray_address: Optional[str] = None):
     "generate dataset for training."
     import glob
     from pathlib import Path
+
+    import ray
+    
     cfg = Config()
     x_dates = [Path(_p).stem for _p in glob.glob(os.path.join(cfg.downsampled_10m_dir, "*.parquet"))]
     y_dates = [Path(_p).stem for _p in glob.glob(os.path.join(cfg.ret_1h_dir, "*.parquet"))]
     u_dates = [Path(_p).stem for _p in glob.glob(os.path.join(cfg.univ_dir, "*.parquet"))]
     
-    xy_dates = set(x_dates).intersection(set(y_dates)).intersection(set(u_dates))
+    _dates = set(x_dates).intersection(set(y_dates)).intersection(set(u_dates))
+    existing_dates = [Path(_p).stem for _p in glob.glob(os.path.join(cfg.research_dataset_dir, "*.parquet"))]
+    typer.echo(f"Total existing dates: {len(existing_dates)}") 
+    _left_dates = [_d for _d in _dates if _d not in existing_dates]  
+    typer.echo(f"Total dates to process: {len(_left_dates)}")
     
-    existing_xy_dates = [Path(_p).stem for _p in glob.glob(os.path.join(cfg.xy_dir, "*.parquet"))]
-    typer.echo(f"Total existing dates: {len(existing_xy_dates)}") 
-    xy_left_dates = [_d for _d in xy_dates if _d not in existing_xy_dates]  
-    typer.echo(f"Total dates to process: {len(xy_left_dates)}")
+    if ray_address is None:
+        ray.init(num_cpus=n_parallel*cpu_per_task)
+    else:
+        ray.init(
+            address=ray_address, 
+            num_cpus=n_parallel*cpu_per_task, 
+            ignore_reinit_error=True)
     
-    import ray
-    
-    @ray.remote(num_cpus=1)
-    def run_single(date):
+    @ray.remote(num_cpus=cpu_per_task)
+    def run_single(date: str):
         with pl.StringCache():
-            _u = pl.scan_parquet(os.path.join(cfg.univ_dir, f"{date}.parquet")).filter(pl.col('univ_research')).collect()
-            symbols = _u.get_column('symbol').unique().to_list()
-            _x = (pl.scan_parquet(
-                os.path.join(cfg.downsampled_10m_dir, f"{date}.parquet")
-                ).cast(
-                    {"symbol": pl.Categorical}
-                ).filter(
-                    pl.col('symbol').is_in(symbols)
-                ).sort(
-                    ["time", "symbol"]
-                ).collect())
-            _y = (
-                pl.scan_parquet(
-                    os.path.join(cfg.ret_1h_dir, f"{date}.parquet")
-                    ).cast(
-                        {"symbol": pl.Categorical}
-                    ).filter(
-                        pl.col('symbol').is_in(symbols)
-                    ).sort(
-                    ["time", "symbol"]
-                    ).collect()
-                )
-            
-            window_size = 6 if y_horizon == "1h" else 12
-            _x = (
-                _x.group_by_dynamic(
-                    "time",
-                    every=y_horizon,
-                    period=x_horizon,
-                    label="right",
-                    closed="both",
-                    group_by="symbol",
-                ).agg(
-                    *cfg.features_agg,
-                    # *[pl.col(yc).last() for yc in self.data_args.y_columns],
-                    pl.col("time").first().alias("begin"),
-                    pl.col("time").last().alias("end"),
-                    pl.col("time").count().alias("count"),
-                )
-                .filter(pl.col("count") == window_size)
-                # .with_columns(*[pl.col(c).list.to_array(6) for c in cols])
+            df_dataset = generate_dataset_for_one_day(
+                date=datetime.datetime.strptime(date, "%Y-%m-%d").date(),
+                u_dir=cfg.univ_dir,
+                x_dir=cfg.bar_1m_dir,
+                y_dir=cfg.ret_1h_dir,
             )
-
-            _xy = _x.join(_y, on=[cfg.time_col]+cfg.by_cols, how="left")
-            _xy = _xy.with_columns(pl.col(pl.NUMERIC_DTYPES).cast(pl.Float32))
-            _xy.write_parquet(os.path.join(cfg.xy_dir, f"{date}.parquet"))
+            if not os.path.exists(cfg.research_dataset_dir):
+                os.makedirs(cfg.research_dataset_dir, exist_ok=True)
+            df_dataset.write_parquet(
+                os.path.join(cfg.research_dataset_dir, f"{date}.parquet")
+            )
         
     MAX_QUEUE_SIZE = n_parallel
     task_ids = []
     queue_results = []
-    for _d in xy_left_dates:
+    for _d in _left_dates:
         task_ids.append(run_single.remote(_d))
         if len(task_ids) >= MAX_QUEUE_SIZE:
             done_ids, task_ids = ray.wait(task_ids, num_returns=1)

@@ -561,14 +561,11 @@ features_agg = [
 
 class Config:
     PIT_CRYPTO_HOME = os.getenv("PIT_CRYPTO_HOME", os.path.expanduser("~/.pit_crypto"))
-
     def __init__(self):
         self.bar_1m_dir = f"{self.PIT_CRYPTO_HOME}/bar_1m"
         self.downsampled_10m_dir = f"{self.PIT_CRYPTO_HOME}/downsampled_10m"
         self.ret_1h_dir = f"{self.PIT_CRYPTO_HOME}/ret_1h"
-        self.xy_dir = f"{self.PIT_CRYPTO_HOME}/xy"
+        self.research_dataset_dir = f"{self.PIT_CRYPTO_HOME}/crypto_dataset"
         self.univ_dir = f"{self.PIT_CRYPTO_HOME}/univ"
-        self.time_col = "time"
-        self.by_cols = ["symbol"]
         self.features_raw = features_raw
         self.features_agg = features_agg

@@ -69,6 +69,7 @@ def generate_dataset_for_one_day(
     
     df_dataset = dfu.join(dfx_down, on=["date", "symbol"], coalesce=True, how="left")
     df_dataset = df_dataset.join(dfy, on=["date", "symbol"], coalesce=True, how="left")
+    df_dataset = df_dataset.with_columns(pl.col(pl.NUMERIC_DTYPES).cast(pl.Float32))
     return df_dataset
 
     

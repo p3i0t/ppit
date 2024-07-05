@@ -7,7 +7,7 @@ import ray
 import typer
 
 from .config import Config
-from .downsample import downsample_1m
+from .downsample import Aggregator, downsample_1m
 
 app = typer.Typer(
     pretty_exceptions_show_locals=False, 
@@ -58,7 +58,7 @@ def generate_dataset_for_one_day(
     if "date" not in dfx.columns:
         dfx = dfx.with_columns(pl.col("time").dt.date().alias("date"))
     dfx_down = downsample_1m(
-            dfx, bars=cfg.features_raw, agg_list=None
+            dfx, bars=cfg.features_raw, agg_list=[Aggregator.MEAN, Aggregator.STD, Aggregator.ZSCORE]
         )
     
     dfy = pl.read_parquet(os.path.join(y_dir, f"{date}.parquet"))

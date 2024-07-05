@@ -1,6 +1,6 @@
-from typing import Optional
-from enum import Enum
 import itertools
+from enum import Enum
+from typing import Optional
 
 import polars as pl
 
@@ -78,5 +78,6 @@ def downsample_1m(
         pl.col("_upper_boundary").dt.strftime("%H%M").alias("slot"),
     )
     _df = _df.pivot(index=["symbol", "date"], columns="slot", values=downsampled_expr_names)
+    _df = _df.rename({c: c.replace("_slot", "") for c in _df.columns})
     _df = _df.with_columns(pl.col("symbol").cast(pl.Categorical))
     return _df

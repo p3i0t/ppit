@@ -62,6 +62,10 @@ def generate_dataset_for_one_day(
         )
     
     dfy = pl.read_parquet(os.path.join(y_dir, f"{date}.parquet"))
+    dfy = dfy.with_columns(pl.col("time").dt.strftime("%H%M").alias("slot"))
+    y_cols = [c for c in dfy.columns if c.endswith("offsets")]
+    dfy = dfy.pivot(index=["date", "symbol"], columns="slot", values=y_cols)
+    dfy = dfy.rename({c: c.replace("_offsets_slot", "h") for c in dfy.columns})
     
     df_dataset = dfu.join(dfx_down, on=["date", "symbol"], coalesce=True, how="left")
     df_dataset = df_dataset.join(dfy, on=["date", "symbol"], coalesce=True, how="left")
